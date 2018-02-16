@@ -3,36 +3,48 @@
 # include the json parsing library
 . /usr/share/libubox/jshn.sh
 
+value=0
+
 # get reading from DS18B20 1-wire tempearture sensor
 getDS18B20Reading () {
 	# read device unique ID from list of slaves (assumes a single 1-wire slave)
 	local devId=$(cat /sys/devices/w1_bus_master1/w1_master_slaves)
 	# get the reading from the sensor
-	local reading=$(awk -F= '/t=/ {printf "%.03f\n", $2/1000}' /sys/devices/w1_bus_master1/$devId/w1_slave)
+	value=$(awk -F= '/t=/ {printf "%.03f\n", $2/1000}' /sys/devices/w1_bus_master1/$devId/w1_slave)
+}
 
-	json_add_double "temperature" $reading
+# update AWS IoT Thing shadow
+#  arg1 - AWS IoT Thing Name
+updateThingShadow () {
+	local thingId="$1"
+
+	# init JSON for AWS IoT device shadow update
+	json_init
+	json_add_object "state"
+	json_add_object "reported"
+
+	json_add_double "temperature" $value
+
+	# generate json
+	jsonOutput=$(json_dump)
+
+	echo "Updating AWS IoT Thing Shadow"
+	echo "$jsonOutput"
+
+	# publish to AWS IoT
+	mosquitto_pub -q 1 -d -t "\$aws/things/$thingId/shadow/update" -m "$jsonOutput"
 }
 
 # perform all sensor reading actions and publish structured JSON data to AWS IoT
 #  arg1 - AWS IoT Thing Name
 main () {
 	local thingId="$1"
-	# init JSON for AWS IoT device shadow update
-	json_init
-	json_add_object "state"
-	json_add_object "reported"
 
 	# read DS18B20 sensor
 	getDS18B20Reading
 
-	# generate json
-	jsonOutput=$(json_dump)
-
-	echo "Reporting to AWS IoT"
-	echo "$jsonOutput"
-
-	# publish to AWS IoT
-	mosquitto_pub -q 1 -d -t "\$aws/things/$thingId/shadow/update" -m "$jsonOutput"
+	# update AWS IoT Thing shadow with latest measurement
+	updateThingShadow "$thingId"
 }
 
 ## parse arguments
